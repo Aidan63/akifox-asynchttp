@@ -169,7 +169,7 @@ class HttpResponse {
     return _contentText;
   }
 
-#if (openfl && !flash && !js) //TODO support for flash and js
+#if (openfl && !js) //TODO support for flash and js
 
   @:dox(hide)
   public function toBitmapData():openfl.display.BitmapData {

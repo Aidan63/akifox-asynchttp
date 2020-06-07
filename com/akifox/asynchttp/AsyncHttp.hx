@@ -22,36 +22,14 @@ import haxe.io.Bytes;
 
 using StringTools;
 
-#if flash
-
-// Standard Flash URLLoader
-import flash.net.URLLoader;
-import flash.net.URLLoaderDataFormat;
-import flash.net.URLRequest;
-import flash.net.URLRequestHeader;
-import flash.events.Event;
-import flash.events.HTTPStatusEvent;
-import flash.events.SecurityErrorEvent;
-import flash.events.IOErrorEvent;
-
-#elseif js
+#if js
 
 // Standard Haxe Http
 import haxe.Http;
 
-#elseif(neko || cpp || java)
+#elseif (target.threaded)
 
-// Threading
-#if neko
-private typedef Thread = neko.vm.Thread;
-private typedef Lib = neko.Lib;
-#elseif java
-private typedef Thread = java.vm.Thread;
-private typedef Lib = java.Lib;
-#elseif cpp
-private typedef Thread = cpp.vm.Thread;
-private typedef Lib = cpp.Lib;
-#end
+import sys.thread.Thread;
 
 // Sockets
 private typedef AbstractSocket = {
@@ -65,20 +43,8 @@ private typedef AbstractSocket = {
   function shutdown(read:Bool, write:Bool):Void;
 }
 
-// TCP Socket
+private typedef SocketSSL = sys.ssl.Socket;
 private typedef SocketTCP = sys.net.Socket;
-
-// TCP+SSL Socket
-#if java
-  private typedef SocketSSL = java.net.SslSocket;
-#elseif php
-  private typedef SocketSSL = php.net.SslSocket;
-#elseif (python || neko || macro || cpp || lua)
-  private typedef SocketSSL = sys.ssl.Socket;
-#else
-  // Fallback to normal socket
-  private typedef SocketSSL = sys.net.Socket;
-#end
 
 // Host
 private typedef Host = sys.net.Host;
@@ -220,7 +186,7 @@ class AsyncHttp {
 
     request.finalise(); // request will not change
 
-#if (neko || cpp || java)
+#if (target.threaded)
 
       if (request.async) {
         // Asynchronous (with a new thread)
@@ -231,12 +197,7 @@ class AsyncHttp {
         httpViaSocket(request);
       }
 
-#elseif flash
-
-    // URLLoader version (FLASH)
-    httpViaUrlLoader(request);
-
-    #elseif js
+#elseif js
 
     // Standard Haxe HTTP
     httpViaHaxeHttp(request);
@@ -262,7 +223,7 @@ class AsyncHttp {
     if (request.callbackProgress != null) request.callbackProgress(loaded, total);
   }
 
-#if (neko || cpp || java)
+#if (target.threaded)
 
   // ==========================================================================================
   // Multi-thread version for neko, CPP + JAVA
@@ -290,9 +251,6 @@ class AsyncHttp {
     var s:AbstractSocket;
     if (url.isSsl) {
       s = new SocketSSL();
-#if (!python && !neko && !java && !macro && !cpp && !lua && !php)
-      error('Requested HTTPS but no SSL support (fallback on HTTP)', request.fingerprint);
-#end
     } else {
       s = new SocketTCP();
     }
@@ -304,11 +262,7 @@ class AsyncHttp {
       request.fingerprint);
     try {
       s.setTimeout(request.timeout);
-#if flash
-      s.connect(url.host, url.port);
-#else
       s.connect(new Host(url.host), url.port);
-#end
       connected = true;
     } catch (msg:Dynamic) {
       errorMessage = error('Request failed -> $msg', request.fingerprint);
@@ -584,125 +538,6 @@ class AsyncHttp {
 
     log('Response $status ($contentLength bytes in $time s)\n> ${request.method} $url', request.fingerprint);
     this.callback(request, time, url, headers, status, content, errorMessage);
-  }
-
-#elseif flash
-
-  // ==========================================================================================
-  // URLLoader version (FLASH)
-
-  // Convert from the Flash format
-  private function convertFromFlashHeaders(urlLoaderHeaders:Array<Dynamic>):HttpHeaders {
-    var headers = new HttpHeaders();
-    if (urlLoaderHeaders != null) {
-      for (el in urlLoaderHeaders) {
-        headers.add(el.name.trim().toLowerCase(), el.value);
-      }
-    }
-    headers.finalise(); // makes the headers object immutable
-    return headers;
-  }
-
-  private function convertToFlashHeaders(httpHeaders:HttpHeaders):Array<Dynamic>{
-    var headers = new Array<URLRequestHeader>();
-    if (httpHeaders != null) {
-      for (key in httpHeaders.keys()) {
-        var value = httpHeaders.get(key);
-        if (HttpHeaders.validateRequest(key)) {
-          headers.push(new URLRequestHeader(key, value));
-        }
-      }
-    }
-    return headers;
-  }
-
-  private function httpViaUrlLoader(request:HttpRequest) {
-    if (request == null) return;
-
-    var urlLoader:URLLoader = new URLLoader();
-    var start = Timer.stamp();
-
-    // RESPONSE FIELDS
-    var url:URL = request.url;
-    var status:Int = 0;
-    var headers = new HttpHeaders();
-    var content:Bytes = null;
-
-    urlLoader.dataFormat = URLLoaderDataFormat.BINARY; //(contentIsBinary?URLLoaderDataFormat.BINARY:URLLoaderDataFormat.TEXT);
-
-    log('Request\n> ${request.method} ${request.url}', request.fingerprint);
-    var urlRequest = new URLRequest(request.url.toString());
-    urlRequest.method = request.method;
-    if (request.content != null && request.method != HttpMethod.GET) {
-      urlRequest.data = request.content;
-      urlRequest.contentType = request.contentType;
-      //urlRequest.dataFormat = (request.contentIsBinary?URLLoaderDataFormat.BINARY:URLLoaderDataFormat.TEXT);
-    }
-
-    // if (request.headers!=null) { // TODO check if supported (it looks only on POST and limited)
-    // 	// custom headers
-    // 	urlRequest.requestHeaders = convertToFlashHeaders(request.headers);
-    // }
-
-    var httpstatusDone = false;
-
-    urlLoader.addEventListener("httpStatus", function(e:HTTPStatusEvent) {
-      status = e.status;
-      log('Response HTTP_Status $status', request.fingerprint);
-      //content = null; // content will be retrive in EVENT.COMPLETE
-      //urlLoader.dataFormat = URLLoaderDataFormat.BINARY;//(contentIsBinary?URLLoaderDataFormat.BINARY:URLLoaderDataFormat.TEXT);
-      httpstatusDone = true; //flash does not call this event
-    });
-
-    urlLoader.addEventListener("httpResponseStatus", function(e:HTTPStatusEvent) {
-      var newUrl:URL = new URL(e.responseURL);
-      newUrl.merge(request.url);
-      url = newUrl;
-      status = e.status;
-      log('Response HTTP_Response_Status $status', request.fingerprint);
-      try {
-        headers = convertFromFlashHeaders(e.responseHeaders);
-      } catch (e:Dynamic) {}
-      //content = null; // content will be retrive in EVENT.COMPLETE
-
-      //urlLoader.dataFormat = URLLoaderDataFormat.BINARY;(contentIsBinary?URLLoaderDataFormat.BINARY:URLLoaderDataFormat.TEXT);
-      httpstatusDone = true; //flash does not call this event
-    });
-
-    urlLoader.addEventListener(IOErrorEvent.IO_ERROR, function(e:IOErrorEvent) {
-      var time = elapsedTime(start);
-      status = e.errorID;
-      var errorMessage = error('Response Error ' + e.errorID + ' ($time s)\n> ${request.method} ${request.url}', request.fingerprint);
-      this.callback(request, time, url, headers, status, content, errorMessage);
-      urlLoader = null;
-    });
-
-    urlLoader.addEventListener(SecurityErrorEvent.SECURITY_ERROR, function(e:SecurityErrorEvent) {
-      var time = elapsedTime(start);
-      status = 0;
-      var errorMessage = error('Response Security Error ($time s)\n> ${request.method} ${request.url}', request.fingerprint);
-      this.callback(request, time, url, headers, status, content, errorMessage);
-      urlLoader = null;
-    });
-
-    urlLoader.addEventListener(Event.COMPLETE, function(e:Event) {
-      if (!httpstatusDone) status = 200;
-
-      var time = elapsedTime(start);
-      content = Bytes.ofString(e.target.data);
-      log('Response Complete $status ($time s)\n> ${request.method} ${request.url}', request.fingerprint);
-      this.callback(request, time, url, headers, status, content);
-      urlLoader = null;
-    });
-
-    try {
-      urlLoader.load(urlRequest);
-    } catch (msg:Dynamic) {
-      var time = elapsedTime(start);
-      var errorMessage = error('Request failed -> $msg', request.fingerprint);
-      this.callback(request, time, url, headers, status, content, errorMessage);
-      urlLoader = null;
-    }
   }
 
 #elseif js

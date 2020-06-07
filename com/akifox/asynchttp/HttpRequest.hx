@@ -246,7 +246,7 @@ class HttpRequest {
         return _url;
     }
 
-#if (!js && !flash)
+#if !js
     if (v.isRelative || !v.isHttp) {
       AsyncHttp.error('HttpRequest.url -> `$value` is not a valid HTTP URL', _fingerprint, true);
     }
